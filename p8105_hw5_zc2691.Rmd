@@ -1,0 +1,228 @@
+---
+title: "p8105_hw5_zc2691"
+author: "Zhaohua Chunyu"
+date: "2022-11-13"
+output: github_document
+---
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggridges)
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = FALSE,
+	fig.width = 8, 
+  fig.height = 6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+
+## Problem 2
+
+```{r}
+homicide= read_csv("data/homicide-data.csv") 
+```
+
+`homicide` dataset includes `r nrow(homicide)` rows of observations and `r ncol(homicide)` variables. Key variables are homicide's `uid`and `reported_date`, victim's information including his/her `last`/`first` name, `race`,`age`, `sex`, variables describing the location where the homicide took place, such as `city`,`state`, `lat`, `lon`, and the current `disposition` of the homicide. 
+
+Create `city_state` and obtain the total number of homicides and the number of unsolved homicides
+```{r}
+homicide_df = 
+  homicide %>% 
+  mutate(city_state = str_c(city, "_", state)) %>% 
+  filter(city_state != "Tulsa_AL")
+
+homi_total = 
+  homicide_df %>% 
+  group_by(city_state) %>% 
+  summarize(
+    homi_total = n()
+  ) 
+
+homi_unsol = 
+  homicide_df %>% 
+  filter(disposition %in% c("Closed without arrest", "Open/No arrest")) %>% 
+  group_by(city_state) %>% 
+  summarize(
+    homi_unsol = n()
+  )
+homicide_count = full_join(homi_unsol, homi_total) 
+```
+
+Use the prop.test function to estimate the proportion of homicides that are unsolved
+```{r}
+balti_count = 
+  homicide_count %>% 
+  filter(city_state == "Baltimore_MD")
+
+prop_test = 
+  prop.test(
+    x = balti_count %>% pull(homi_unsol), 
+    n = balti_count %>% pull(homi_total)) 
+
+prop_test_df = broom::tidy(prop_test)
+prop_test_df %>% 
+  select(estimate, conf.low, conf.high) 
+```
+
+Run prop.test for each of the cities in your dataset
+```{r}
+prop = 
+  function(homicide_count) {
+    output =  
+      prop.test(homicide_count %>% pull(homi_unsol), 
+                homicide_count %>% pull(homi_total)) %>% 
+      broom::tidy() %>% 
+      select(estimate, conf.low, conf.high)
+  }
+
+homicide_count_nested = 
+   homicide_count %>% 
+  nest(data = homi_unsol:homi_total)
+
+homicide_count_unnested = 
+  homicide_count_nested %>% 
+  mutate(
+    prop_city = map(data, prop)) %>% 
+  unnest(prop_city)
+homicide_count_unnested
+
+```
+
+Create a plot that shows the estimates and CIs for each city.
+
+```{r}
+ homicide_count_unnested %>% 
+  mutate(CI = conf.high - conf.low,
+         city_state = fct_reorder(city_state, estimate)) %>% 
+  ggplot(aes(x = city_state, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(x = city_state, ymin = conf.low, ymax = conf.high))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 6)) +
+   labs(
+    title = "Estimated Proportion of Unsolved Homicides for 50 Major U.S. Cities",
+    x = "City, State",
+    y = "Esitmated Proportion of Unsolved Homicides with 95% CI")
+```
+
+## Problem 3
+Build a function of normal distribution that fixes n=30 and σ=5
+```{r}
+sim_power = function(n = 30, miu, sigma = 5) {
+  
+  x = rnorm(n = n, mean = miu, sd = sigma)
+  
+  t_test = 
+    t.test(x, miu = 0) %>% 
+    broom::tidy()
+  
+  tibble(
+    estimate_hat = t_test %>% pull(estimate),
+    p_value = t_test %>% pull(p.value)
+  )
+}
+```
+
+Generate 5000 datasets from the model with μ = 0
+```{r}
+sim_results_df = 
+  expand_grid(
+    true_mean = 0,
+    iteration = 1:5000
+  ) %>% 
+  mutate(
+    estimate_df = map(.x = true_mean, ~ sim_power(miu = .x))
+  ) %>% 
+  unnest(estimate_df)
+
+sim_results_df
+```
+
+Generate 5000 datasets from the model with μ = 1:6
+```{r}
+sim_results_df_2 = 
+  expand_grid(
+    true_mean = c(1:6),
+    iteration = 1:5000
+  ) %>% 
+  mutate(
+    estimate_df = map(.x = true_mean, ~ sim_power(miu = .x))
+  ) %>% 
+  unnest(estimate_df)
+
+sim_results_df_2
+```
+
+Make a plot showing the proportion of times the null was rejected (the power of the test) on the y axis and the true value of μ on the x axis.
+
+```{r}
+sim_results_df_2 = 
+  sim_results_df_2 %>% 
+  mutate(
+    result = case_when(
+    p_value < 0.05 ~ "reject null",
+    p_value >= 0.05  ~ "fail to reject")) 
+  
+sim_results_df_2 %>%  
+  group_by(true_mean) %>%
+  filter(result == "reject null") %>% 
+  summarize(n_obs = n()) %>% 
+  mutate(reject_prop = n_obs / 5000) %>% 
+  ggplot(aes(x = true_mean, y = reject_prop)) +
+  geom_point() +
+  geom_path() +
+  labs(
+    title = "Power of the T.test for miu = 1:6",
+    x = "True Mean",
+    y = "Proportion of Rejection Times")
+```
+
+Describe the association between effect size and power:
+
+The statistical power depends on effect size. The effect size is calculated by dividing the difference between the true mean and estimated miu by sd. Therefore, the effect size increases as the true mean increases while sd is constant. Effect size tells you how meaningful the relationship between variables or the difference between groups is. As effect size increases, the power of the t-test increases. The power approaches 1 as the true mean increases.
+
+Make a plot showing the average estimate of miu  on the y axis and the true value of miu on the x axis. Make a second plot the average estimate of miu only in samples for which the null was rejected on the y axis and the true value of μ on the x axis.
+
+```{r}
+sim_average_total = 
+  sim_results_df_2 %>%
+  group_by(true_mean) %>% 
+  summarize(estimate_avg = mean(estimate_hat)) %>% 
+  mutate(data = "all")
+
+sim_average_reject = 
+  sim_results_df_2 %>%
+  filter(result == "reject null") %>% 
+  group_by(true_mean) %>% 
+  summarize(estimate_avg = mean(estimate_hat)) %>% 
+  mutate(data = "null rejected")
+
+sim_average = bind_rows(sim_average_total, sim_average_reject)
+
+sim_average %>% 
+ggplot(aes(x = true_mean, y = estimate_avg, color = data)) +
+  geom_point(alpha = 0.8) + 
+  geom_path(alpha = 0.8) +
+  scale_x_continuous( breaks = 1:6 )+
+  scale_y_continuous( breaks = 1:6 )+
+  labs(
+    title = "Average estimate of miu vs. True Mean",
+    x = "True Mean",
+    y = "Average estimate of miu(1:6)"
+  ) + 
+  theme(legend.position = "bottom")
+```
+
+Based on the plot, the sample average of μ̂  across tests for which the null is rejected is approximately equal to the true value of μ when the true mean is greater than or equal to 4. With smaller true mean values, the average estimate of miu is slightly larger than the true mean. 
+
